@@ -22,6 +22,10 @@ document.addEventListener('DOMContentLoaded', () => {
   let prerollDone = false;
   let currentAdPlaying = false;
   let currentSong = '';
+  let pendingMidrollMetadata = '';
+  let pendingMidrollUntil = 0;
+  let lastConsumedTriggerKey = '';
+  let lastConsumedAt = 0;
 
   function setVolumeBoth() {
     const vol = Number(volumeSlider.value || 0.8);
@@ -44,6 +48,7 @@ document.addEventListener('DOMContentLoaded', () => {
     isPlaying = true;
     playBtn.innerHTML = '⏸';
     adStatusMsg.innerHTML = 'stream actief';
+    evaluatePendingMidroll();
   }
 
   function pauseMain() {
@@ -98,13 +103,46 @@ document.addEventListener('DOMContentLoaded', () => {
     return false;
   }
 
-  function evaluateMidrollsFromSong(songText) {
+  function songContainsMidrollTrigger(songText) {
+    const hay = String(songText || '').toLowerCase();
+    if (!hay) return false;
+    if (/adcount\s*-\s*\d+/i.test(hay)) return true;
+    return Object.keys(data.metaKeywordQuotas || {}).some(keyword => hay.includes(String(keyword).toLowerCase()));
+  }
+
+  function rememberMidrollTrigger(songText) {
+    if (!songContainsMidrollTrigger(songText)) return;
+    pendingMidrollMetadata = songText;
+    pendingMidrollUntil = Date.now() + 12000;
+    adStatusMsg.innerHTML = 'midroll trigger gezien';
+  }
+
+  function evaluatePendingMidroll() {
     if (currentAdPlaying || !isPlaying) return;
+    if (!pendingMidrollMetadata) return;
+    if (Date.now() > pendingMidrollUntil) {
+      pendingMidrollMetadata = '';
+      pendingMidrollUntil = 0;
+      return;
+    }
+
     data = Shared.loadAppData();
-    const desiredCount = Shared.parseAdCount(songText, data);
-    const selected = Shared.chooseAdsForBreak(data, 'midroll', songText, desiredCount);
+    const triggerKey = pendingMidrollMetadata.toLowerCase();
+    if (triggerKey === lastConsumedTriggerKey && (Date.now() - lastConsumedAt) < 15000) return;
+
+    const desiredCount = Shared.parseAdCount(pendingMidrollMetadata, data);
+    const selected = Shared.chooseAdsForBreak(data, 'midroll', pendingMidrollMetadata, desiredCount);
     if (!selected.length) return;
-    playAdBreakSequence(selected);
+
+    lastConsumedTriggerKey = triggerKey;
+    lastConsumedAt = Date.now();
+    const usedMetadata = pendingMidrollMetadata;
+    pendingMidrollMetadata = '';
+    pendingMidrollUntil = 0;
+    playAdBreakSequence(selected, () => {
+      adStatusMsg.innerHTML = 'ads actief';
+      console.log('Midroll gestart op trigger:', usedMetadata);
+    });
   }
 
   async function fetchMetadata() {
@@ -122,13 +160,13 @@ document.addEventListener('DOMContentLoaded', () => {
     if (song) {
       liveSongTitle.innerHTML = song;
       nowPlayingMeta.innerHTML = song.substring(0, 60);
-      if (song !== currentSong) {
-        currentSong = song;
-        evaluateMidrollsFromSong(currentSong);
-      }
+      rememberMidrollTrigger(song);
+      if (song !== currentSong) currentSong = song;
+      evaluatePendingMidroll();
     } else {
       liveSongTitle.innerHTML = 'Metadata niet beschikbaar';
       nowPlayingMeta.innerHTML = 'live metadata laden...';
+      evaluatePendingMidroll();
     }
   }
 
@@ -194,6 +232,6 @@ document.addEventListener('DOMContentLoaded', () => {
   updateCurrentProgram();
   bindPanels();
   fetchMetadata();
-  setInterval(fetchMetadata, 1000);
+  setInterval(fetchMetadata, 100);
   setInterval(updateCurrentProgram, 60000);
 });
