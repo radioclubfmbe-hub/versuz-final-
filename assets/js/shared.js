@@ -222,27 +222,70 @@
     return new Date(ad.startDateTime) <= now && new Date(ad.endDateTime) >= now;
   }
 
+  function normalizeForMatch(value) {
+    return String(value || '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]+/g, '');
+  }
+
+  function extractAdCountNumber(songText) {
+    const text = String(songText || '').toLowerCase();
+    const patterns = [
+      /ad\s*count\s*[-_: ]\s*(\d+)/i,
+      /adcount\s*[-_: ]\s*(\d+)/i,
+      /ad\s*count(\d+)/i,
+      /adcount(\d+)/i
+    ];
+    for (const pattern of patterns) {
+      const match = text.match(pattern);
+      if (match) return parseInt(match[1], 10);
+    }
+    const normalized = normalizeForMatch(text);
+    const compactMatch = normalized.match(/adcount(\d+)/i);
+    if (compactMatch) return parseInt(compactMatch[1], 10);
+    return null;
+  }
+
+  function metadataContainsKeyword(songText, keyword) {
+    const hayRaw = String(songText || '').toLowerCase();
+    const keyRaw = String(keyword || '').toLowerCase().trim();
+    if (!hayRaw || !keyRaw) return false;
+    if (hayRaw.includes(keyRaw)) return true;
+    const hayNorm = normalizeForMatch(hayRaw);
+    const keyNorm = normalizeForMatch(keyRaw);
+    if (!hayNorm || !keyNorm) return false;
+    return hayNorm.includes(keyNorm);
+  }
+
+  function hasMidrollTrigger(songText, data) {
+    if (extractAdCountNumber(songText) !== null) return true;
+    return Object.keys(data.metaKeywordQuotas || {}).some(keyword => metadataContainsKeyword(songText, keyword));
+  }
+
   function metadataMatches(ad, songText) {
     if (ad.triggerType === 'datetime') return true;
     if (ad.triggerType !== 'metadata') return true;
-    const hay = String(songText || '').toLowerCase();
-    if (!hay) return false;
-    const trigger = String(ad.triggerValue || '').trim().toLowerCase();
+    const trigger = String(ad.triggerValue || '').trim();
     if (!trigger) return false;
-    return hay.includes(trigger);
+    return metadataContainsKeyword(songText, trigger);
   }
 
   function parseAdCount(songText, data) {
-    const hay = String(songText || '').toLowerCase();
+    const directAdCount = extractAdCountNumber(songText);
+    if (directAdCount !== null) {
+      return Math.max(1, Math.min(10, Number.isNaN(directAdCount) ? 1 : directAdCount));
+    }
+
     for (const [keyword, count] of Object.entries(data.metaKeywordQuotas || {})) {
-      if (hay.includes(String(keyword).toLowerCase())) {
+      if (metadataContainsKeyword(songText, keyword)) {
         const n = parseInt(count, 10);
         return Math.max(1, Math.min(10, Number.isNaN(n) ? 1 : n));
       }
     }
-    const m = hay.match(/adcount\s*-\s*(\d+)/i);
-    const n = m ? parseInt(m[1], 10) : 1;
-    return Math.max(1, Math.min(10, Number.isNaN(n) ? 1 : n));
+
+    return 1;
   }
 
   function chooseAdsForBreak(data, type, songText, desiredCount = 1) {
@@ -327,6 +370,10 @@
     getAdAudioFromDB,
     deleteAdAudioFromDB,
     resetDailyAdCounters,
+    normalizeForMatch,
+    metadataContainsKeyword,
+    extractAdCountNumber,
+    hasMidrollTrigger,
     parseAdCount,
     chooseAdsForBreak,
     recordAdPlay,
