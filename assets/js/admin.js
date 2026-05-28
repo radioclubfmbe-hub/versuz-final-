@@ -1,10 +1,69 @@
 document.addEventListener('DOMContentLoaded', () => {
   const Shared = window.VersuzShared;
+  const MONITOR_STORAGE_KEY = 'versuz_monitor_state';
+
   let data = Shared.loadAppData();
   const root = document.getElementById('adminRoot');
   let adminLogged = false;
+  let monitorTimer = null;
+
+  function escapeHtml(value) {
+    return String(value || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function formatDateTime(ts) {
+    if (!ts) return '-';
+    const d = new Date(ts);
+    if (Number.isNaN(d.getTime())) return '-';
+    return d.toLocaleString('nl-BE');
+  }
+
+  function formatAgo(ts) {
+    if (!ts) return '-';
+    const diff = Math.max(0, Date.now() - ts);
+    const sec = Math.floor(diff / 1000);
+    if (sec < 60) return `${sec}s geleden`;
+    const min = Math.floor(sec / 60);
+    if (min < 60) return `${min} min geleden`;
+    const hrs = Math.floor(min / 60);
+    return `${hrs} u geleden`;
+  }
+
+  function formatDurationMs(ms) {
+    const total = Math.max(0, Math.ceil((ms || 0) / 1000));
+    const min = Math.floor(total / 60);
+    const sec = total % 60;
+    return min > 0 ? `${min}m ${sec}s` : `${sec}s`;
+  }
+
+  function readMonitorState() {
+    try {
+      return JSON.parse(localStorage.getItem(MONITOR_STORAGE_KEY) || 'null');
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function stopMonitorRefresh() {
+    if (monitorTimer) {
+      clearInterval(monitorTimer);
+      monitorTimer = null;
+    }
+  }
+
+  function startMonitorRefresh() {
+    stopMonitorRefresh();
+    renderStreamMonitor();
+    monitorTimer = setInterval(renderStreamMonitor, 1000);
+  }
 
   function renderLogin() {
+    stopMonitorRefresh();
     root.innerHTML = `
       <div class="login-overlay">
         <h3>🔐 Backoffice login</h3>
@@ -14,6 +73,7 @@ document.addEventListener('DOMContentLoaded', () => {
         <p class="warning">${Shared.ADMIN_USERNAME} / ${Shared.ADMIN_PASSWORD}</p>
       </div>
     `;
+
     document.getElementById('submitAdminLogin').addEventListener('click', () => {
       const user = document.getElementById('adminUsername').value.trim();
       const pwd = document.getElementById('adminPassword').value.trim();
@@ -45,24 +105,70 @@ document.addEventListener('DOMContentLoaded', () => {
           <label>Metadata URL</label>
           <input type="text" id="metaBaseUrl" value="${data.metadataSource.baseUrl}">
           <label>Metadata type</label>
-          <select id="metaType"><option value="proxy" ${data.metadataSource.type === 'proxy' ? 'selected' : ''}>Plain text via proxy</option></select>
+          <select id="metaType">
+            <option value="proxy" ${data.metadataSource.type === 'proxy' ? 'selected' : ''}>Plain text via proxy</option>
+          </select>
           <button id="saveStreamBtn" class="small-btn">Opslaan</button>
           <div class="inline-note">Gebruik normaal <code class="code-inline">/api/metadata</code> als metadata URL.</div>
+        </div>
+
+        <div class="admin-form">
+          <h3>📡 Interne streammonitor</h3>
+          <p class="warning">Alleen zichtbaar in admin. Luisteraars zien deze interne info niet.</p>
+          <div id="streamMonitorAdmin">Wachten op playerdata...</div>
         </div>
       </div>
 
       <div id="tab-schedule" class="admin-tab-panel">
-        <div class="admin-form"><h3>📅 Weekprogramma</h3><div id="weeklyScheduleEditor"></div><button id="saveWeeklyBtn" class="small-btn">Opslaan</button></div>
-        <div class="admin-form"><h3>📌 Vervangingen</h3><input type="date" id="ovDate"><input type="text" id="ovStart" placeholder="Start vb 14:00"><input type="text" id="ovEnd" placeholder="Eind vb 16:00"><input type="text" id="ovTitle" placeholder="Programma"><textarea id="ovDesc" rows="2" placeholder="Omschrijving"></textarea><button id="addOvBtn" class="small-btn">Toevoegen</button><div id="overrideListAdmin"></div></div>
+        <div class="admin-form">
+          <h3>📅 Weekprogramma</h3>
+          <div id="weeklyScheduleEditor"></div>
+          <button id="saveWeeklyBtn" class="small-btn">Opslaan</button>
+        </div>
+        <div class="admin-form">
+          <h3>📌 Vervangingen</h3>
+          <input type="date" id="ovDate">
+          <input type="text" id="ovStart" placeholder="Start vb 14:00">
+          <input type="text" id="ovEnd" placeholder="Eind vb 16:00">
+          <input type="text" id="ovTitle" placeholder="Programma">
+          <textarea id="ovDesc" rows="2" placeholder="Omschrijving"></textarea>
+          <button id="addOvBtn" class="small-btn">Toevoegen</button>
+          <div id="overrideListAdmin"></div>
+        </div>
       </div>
 
       <div id="tab-news" class="admin-tab-panel">
-        <div class="admin-form"><h3>📰 Nieuws</h3><input type="text" id="newsTitleInput" placeholder="Titel"><textarea id="newsContentInput" rows="3" placeholder="Inhoud"></textarea><input type="file" id="newsImageUpload" accept="image/*"><div class="flex-row"><button id="addNewsAdminBtn" class="small-btn">Toevoegen</button><select id="newsSelectDelete"></select><button id="delNewsBtn" class="small-btn">Verwijder</button></div><div id="newsCountAdmin"></div></div>
+        <div class="admin-form">
+          <h3>📰 Nieuws</h3>
+          <input type="text" id="newsTitleInput" placeholder="Titel">
+          <textarea id="newsContentInput" rows="3" placeholder="Inhoud"></textarea>
+          <input type="file" id="newsImageUpload" accept="image/*">
+          <div class="flex-row">
+            <button id="addNewsAdminBtn" class="small-btn">Toevoegen</button>
+            <select id="newsSelectDelete"></select>
+            <button id="delNewsBtn" class="small-btn">Verwijder</button>
+          </div>
+          <div id="newsCountAdmin"></div>
+        </div>
       </div>
 
       <div id="tab-metadata" class="admin-tab-panel">
-        <div class="admin-form"><h3>🔑 Metadata keywords & aantal spots</h3><p class="warning">Hier leg je vast: welke metadata keyword bestaat en hoeveel spots moeten spelen als die keyword verschijnt.</p><div class="flex-row"><input type="text" id="metaKeywordInput" placeholder="vb adcount- of sponsor-a"><input type="number" id="metaKeywordCountInput" min="1" max="10" value="1" style="width:120px"><button id="addMetaKeywordBtn" class="small-btn">Toevoegen / updaten</button></div><div id="metaKeywordListAdmin"></div></div>
-        <div class="admin-form"><h3>🎵 Handmatige metadata fallback</h3><input type="text" id="manualMetaInput" value="${data.manualMetadata || ''}" placeholder="Titel artiest - nummer"><button id="setManualMetaBtn" class="small-btn">Opslaan</button></div>
+        <div class="admin-form">
+          <h3>🔑 Metadata keywords & aantal spots</h3>
+          <p class="warning">Hier leg je vast: welke metadata keyword bestaat en hoeveel spots moeten spelen als die keyword verschijnt.</p>
+          <div class="flex-row">
+            <input type="text" id="metaKeywordInput" placeholder="vb adcount- of sponsor-a">
+            <input type="number" id="metaKeywordCountInput" min="1" max="10" value="1" style="width:120px">
+            <button id="addMetaKeywordBtn" class="small-btn">Toevoegen / updaten</button>
+          </div>
+          <div id="metaKeywordListAdmin"></div>
+        </div>
+
+        <div class="admin-form">
+          <h3>🎵 Handmatige metadata fallback</h3>
+          <input type="text" id="manualMetaInput" value="${data.manualMetadata || ''}" placeholder="Titel artiest - nummer">
+          <button id="setManualMetaBtn" class="small-btn">Opslaan</button>
+        </div>
       </div>
 
       <div id="tab-ads" class="admin-tab-panel">
@@ -70,31 +176,68 @@ document.addEventListener('DOMContentLoaded', () => {
           <h3>📢 Spots toevoegen</h3>
           <input type="text" id="adNameInput" placeholder="Spotnaam">
           <input type="text" id="advertiserInput" placeholder="Adverteerder">
-          <select id="adTypeSelect"><option value="preroll">Preroll</option><option value="midroll">Midroll</option><option value="both">Beide</option></select>
-          <select id="triggerTypeSelect"><option value="metadata">Metadata-keyword</option><option value="datetime">Vaste datum/tijd</option></select>
+          <select id="adTypeSelect">
+            <option value="preroll">Preroll</option>
+            <option value="midroll">Midroll</option>
+            <option value="both">Beide</option>
+          </select>
+          <select id="triggerTypeSelect">
+            <option value="metadata">Metadata-keyword</option>
+            <option value="datetime">Vast tijdsvenster</option>
+          </select>
           <label>Metadata keyword</label>
           <select id="triggerKeywordSelect">${Shared.metadataKeywordOptionsHtml(data)}</select>
           <input type="text" id="adUrlInput" placeholder="Audio URL mp3 (optioneel)">
           <input type="file" id="adFileUpload" accept="audio/mpeg,audio/mp3,audio/*">
           <input type="datetime-local" id="adStart">
           <input type="datetime-local" id="adEnd">
-          <div class="flex-row"><label>Startuur <input type="number" id="adHourStart" min="0" max="23" style="width:90px"></label><label>Einduur <input type="number" id="adHourEnd" min="0" max="23" style="width:90px"></label><label>Max per dag <input type="number" id="adMaxPerDay" min="1" value="4" style="width:110px"></label><label>Max totaal <input type="number" id="adMaxPlays" min="1" value="50" style="width:110px"></label></div>
+          <div class="flex-row">
+            <label>Startuur <input type="number" id="adHourStart" min="0" max="23" style="width:90px"></label>
+            <label>Einduur <input type="number" id="adHourEnd" min="0" max="23" style="width:90px"></label>
+            <label>Max per dag <input type="number" id="adMaxPerDay" min="1" value="4" style="width:110px"></label>
+            <label>Max totaal <input type="number" id="adMaxPlays" min="1" value="50" style="width:110px"></label>
+          </div>
           <textarea id="adNotesInput" rows="2" placeholder="Notities / campagne-info"></textarea>
           <button id="addAdRuleBtn" class="small-btn">Spot toevoegen</button>
         </div>
-        <div class="admin-form"><h3>📋 Spotoverzicht</h3><div id="adRulesListAdmin"></div></div>
-        <div class="admin-form"><h3>📊 Per adverteerder</h3><div id="advertiserStatsAdmin"></div></div>
+
+        <div class="admin-form">
+          <h3>📋 Spotoverzicht</h3>
+          <div id="adRulesListAdmin"></div>
+        </div>
+
+        <div class="admin-form">
+          <h3>📊 Per adverteerder</h3>
+          <div id="advertiserStatsAdmin"></div>
+        </div>
       </div>
 
-      <div class="top-actions" style="margin-top:1rem;"><button id="resetDemoBtn" class="small-btn" style="background:#7a2e2e;">Reset lokale data</button><button id="logoutAdminBtn" class="small-btn">Uitloggen</button></div>
+      <div class="top-actions" style="margin-top:1rem;">
+        <button id="resetDemoBtn" class="small-btn" style="background:#7a2e2e;">Reset lokale data</button>
+        <button id="logoutAdminBtn" class="small-btn">Uitloggen</button>
+      </div>
     `;
   }
 
   function renderWeeklyEditor() {
     const editor = document.getElementById('weeklyScheduleEditor');
     editor.innerHTML = data.weeklySchedule.map((day, dayIndex) => {
-      const rows = day.slots.map((slot, slotIndex) => `<div class="flex-row"><input type="text" value="${slot.time}" data-day="${dayIndex}" data-slot="${slotIndex}" data-field="time" style="width:130px"><input type="text" value="${slot.title}" data-day="${dayIndex}" data-slot="${slotIndex}" data-field="title"><input type="text" value="${slot.desc || ''}" data-day="${dayIndex}" data-slot="${slotIndex}" data-field="desc"><button class="small-btn removeSlotBtn" data-day="${dayIndex}" data-slot="${slotIndex}">X</button></div>`).join('');
-      return `<div style="border:1px solid #3f4560; border-radius:1rem; margin-bottom:1rem; padding:0.8rem;"><h4>${day.day}</h4>${rows}<button class="small-btn addSlotBtn" data-day="${dayIndex}">Tijdslot toevoegen</button></div>`;
+      const rows = day.slots.map((slot, slotIndex) => `
+        <div class="flex-row">
+          <input type="text" value="${slot.time}" data-day="${dayIndex}" data-slot="${slotIndex}" data-field="time" style="width:130px">
+          <input type="text" value="${slot.title}" data-day="${dayIndex}" data-slot="${slotIndex}" data-field="title">
+          <input type="text" value="${slot.desc || ''}" data-day="${dayIndex}" data-slot="${slotIndex}" data-field="desc">
+          <button class="small-btn removeSlotBtn" data-day="${dayIndex}" data-slot="${slotIndex}">X</button>
+        </div>
+      `).join('');
+
+      return `
+        <div style="border:1px solid #3f4560; border-radius:1rem; margin-bottom:1rem; padding:0.8rem;">
+          <h4>${day.day}</h4>
+          ${rows}
+          <button class="small-btn addSlotBtn" data-day="${dayIndex}">Tijdslot toevoegen</button>
+        </div>
+      `;
     }).join('');
 
     document.querySelectorAll('[data-field]').forEach(inp => inp.addEventListener('change', () => {
@@ -123,7 +266,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function renderOverrides() {
     const div = document.getElementById('overrideListAdmin');
-    div.innerHTML = data.overrides.map((o, idx) => `<div><b>${o.date} ${o.startTime}-${o.endTime}</b> ${o.programTitle} <button class="small-btn" data-ovidx="${idx}">X</button></div>`).join('') || '<p class="warning">Nog geen vervangingen.</p>';
+    div.innerHTML = data.overrides.map((o, idx) => `
+      <div>
+        <b>${o.date} ${o.startTime}-${o.endTime}</b> ${o.programTitle}
+        <button class="small-btn" data-ovidx="${idx}">X</button>
+      </div>
+    `).join('') || '<p class="warning">Nog geen vervangingen.</p>';
+
     document.querySelectorAll('[data-ovidx]').forEach(btn => btn.addEventListener('click', () => {
       const idx = parseInt(btn.dataset.ovidx, 10);
       data.overrides.splice(idx, 1);
@@ -141,17 +290,40 @@ document.addEventListener('DOMContentLoaded', () => {
   function renderMetadataKeywords() {
     const list = document.getElementById('metaKeywordListAdmin');
     const entries = Object.entries(data.metaKeywordQuotas || {});
-    document.getElementById('triggerKeywordSelect').innerHTML = Shared.metadataKeywordOptionsHtml(data, document.getElementById('triggerKeywordSelect').value || '');
+    const currentValue = document.getElementById('triggerKeywordSelect') ? document.getElementById('triggerKeywordSelect').value || '' : '';
+    document.getElementById('triggerKeywordSelect').innerHTML = Shared.metadataKeywordOptionsHtml(data, currentValue);
+
     if (!entries.length) {
       list.innerHTML = '<p class="warning">Nog geen metadata keywords ingesteld.</p>';
       return;
     }
-    list.innerHTML = `<table><thead><tr><th>Metadata keyword</th><th>Aantal spots</th><th>Actie</th></tr></thead><tbody>${entries.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td><td><button class="small-btn" data-edit-meta="${k}">Bewerk</button> <button class="small-btn" data-del-meta="${k}">Verwijder</button></td></tr>`).join('')}</tbody></table>`;
+
+    list.innerHTML = `
+      <table>
+        <thead>
+          <tr><th>Metadata keyword</th><th>Aantal spots</th><th>Actie</th></tr>
+        </thead>
+        <tbody>
+          ${entries.map(([k, v]) => `
+            <tr>
+              <td>${k}</td>
+              <td>${v}</td>
+              <td>
+                <button class="small-btn" data-edit-meta="${k}">Bewerk</button>
+                <button class="small-btn" data-del-meta="${k}">Verwijder</button>
+              </td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `;
+
     document.querySelectorAll('[data-edit-meta]').forEach(btn => btn.addEventListener('click', () => {
       const key = btn.dataset.editMeta;
       document.getElementById('metaKeywordInput').value = key;
       document.getElementById('metaKeywordCountInput').value = data.metaKeywordQuotas[key];
     }));
+
     document.querySelectorAll('[data-del-meta]').forEach(btn => btn.addEventListener('click', () => {
       delete data.metaKeywordQuotas[btn.dataset.delMeta];
       Shared.saveMetaKeywordQuotas(data);
@@ -162,14 +334,27 @@ document.addEventListener('DOMContentLoaded', () => {
   function renderAdRules() {
     Shared.resetDailyAdCounters(data);
     const div = document.getElementById('adRulesListAdmin');
+
     if (!data.adRules.length) {
       div.innerHTML = '<p class="warning">Nog geen spots toegevoegd.</p>';
       return;
     }
+
     div.innerHTML = data.adRules.map((r, i) => {
       r = Shared.normalizeAdRule(r);
-      return `<div style="border-left:3px solid #ff8855; margin:6px 0; padding:8px; border-radius:0.7rem; background:#13182a;"><b>${r.name}</b> — ${r.advertiser}<br>type: ${r.type} • metadata: ${r.triggerType}:${r.triggerValue || '-'}<br>uur: ${r.hourStart === '' ? 'altijd' : r.hourStart + ':00'} - ${r.hourEnd === '' ? 'altijd' : r.hourEnd + ':00'}<br>vandaag: ${r.playsToday}/${r.maxPerDay} • totaal: ${r.currentPlays}/${r.maxPlays}<br>periode: ${r.startDateTime} tot ${r.endDateTime}<br>audio: ${r.audioMode === 'upload' ? 'upload in browser' : (r.audioUrl || '-')}<br><button class="small-btn" data-adidx="${i}">Verwijder</button></div>`;
+      return `
+        <div style="border-left:3px solid #ff8855; margin:6px 0; padding:8px; border-radius:0.7rem; background:#13182a;">
+          <b>${r.name}</b> — ${r.advertiser}<br>
+          type: ${r.type} • metadata: ${r.triggerType}:${r.triggerValue || '-'}<br>
+          uur: ${r.hourStart === '' ? 'altijd' : r.hourStart + ':00'} - ${r.hourEnd === '' ? 'altijd' : r.hourEnd + ':00'}<br>
+          vandaag: ${r.playsToday}/${r.maxPerDay} • totaal: ${r.currentPlays}/${r.maxPlays}<br>
+          periode: ${r.startDateTime} tot ${r.endDateTime}<br>
+          audio: ${r.audioMode === 'upload' ? 'upload in browser' : (r.audioUrl || '-')}<br>
+          <button class="small-btn" data-adidx="${i}">Verwijder</button>
+        </div>
+      `;
     }).join('');
+
     document.querySelectorAll('[data-adidx]').forEach(btn => btn.addEventListener('click', async () => {
       const idx = parseInt(btn.dataset.adidx, 10);
       const ad = Shared.normalizeAdRule(data.adRules[idx]);
@@ -184,14 +369,97 @@ document.addEventListener('DOMContentLoaded', () => {
   function renderAdvertiserStats() {
     const div = document.getElementById('advertiserStatsAdmin');
     const grouped = {};
+
     data.adRules.map(Shared.normalizeAdRule).forEach(ad => {
       if (!grouped[ad.advertiser]) grouped[ad.advertiser] = { spots: 0, today: 0, total: 0 };
       grouped[ad.advertiser].spots += 1;
       grouped[ad.advertiser].today += ad.playsToday;
       grouped[ad.advertiser].total += ad.currentPlays;
     });
+
     const rows = Object.entries(grouped);
-    div.innerHTML = rows.length ? `<table><thead><tr><th>Adverteerder</th><th>Spots</th><th>Vandaag</th><th>Totaal</th></tr></thead><tbody>${rows.map(([n, v]) => `<tr><td>${n}</td><td>${v.spots}</td><td>${v.today}</td><td>${v.total}</td></tr>`).join('')}</tbody></table>` : '<p class="warning">Nog geen adverteerders of spots toegevoegd.</p>';
+    div.innerHTML = rows.length ? `
+      <table>
+        <thead>
+          <tr><th>Adverteerder</th><th>Spots</th><th>Vandaag</th><th>Totaal</th></tr>
+        </thead>
+        <tbody>
+          ${rows.map(([n, v]) => `<tr><td>${n}</td><td>${v.spots}</td><td>${v.today}</td><td>${v.total}</td></tr>`).join('')}
+        </tbody>
+      </table>
+    ` : '<p class="warning">Nog geen adverteerders of spots toegevoegd.</p>';
+  }
+
+  function renderStreamMonitor() {
+    const div = document.getElementById('streamMonitorAdmin');
+    if (!div) return;
+
+    const state = readMonitorState();
+    if (!state) {
+      div.innerHTML = '<p class="warning">Nog geen monitordata gevonden. Open eerst de player in dezelfde browser en start de stream.</p>';
+      return;
+    }
+
+    const history = Array.isArray(state.metadataHistory) ? state.metadataHistory : [];
+    const historyHtml = history.length ? `
+      <table>
+        <thead>
+          <tr><th>Tijd</th><th>Metadata</th></tr>
+        </thead>
+        <tbody>
+          ${history.map(item => `
+            <tr>
+              <td>${formatDateTime(item.timestamp)}</td>
+              <td>${escapeHtml(item.text)}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    ` : '<p class="warning">Geen recente metadata in history.</p>';
+
+    div.innerHTML = `
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:12px; margin-bottom:12px;">
+        <div style="background:#13182a; padding:10px; border-radius:12px;">
+          <b>Status publiek</b><br>${escapeHtml(state.publicStatus || '-')}
+        </div>
+        <div style="background:#13182a; padding:10px; border-radius:12px;">
+          <b>Status intern</b><br>${escapeHtml(state.internalStatus || '-')}
+        </div>
+        <div style="background:#13182a; padding:10px; border-radius:12px;">
+          <b>Metadata polling</b><br>${state.metadataPollingActive ? 'actief' : 'gepauzeerd'}
+        </div>
+        <div style="background:#13182a; padding:10px; border-radius:12px;">
+          <b>Laatste update</b><br>${formatDateTime(state.updatedAt)} (${formatAgo(state.updatedAt)})
+        </div>
+        <div style="background:#13182a; padding:10px; border-radius:12px;">
+          <b>Cooldown resterend</b><br>${formatDurationMs(state.cooldownRemainingMs || 0)}
+        </div>
+        <div style="background:#13182a; padding:10px; border-radius:12px;">
+          <b>Laatste trigger</b><br>${escapeHtml(state.lastTriggerText || '-')}
+        </div>
+        <div style="background:#13182a; padding:10px; border-radius:12px;">
+          <b>Laatste midroll</b><br>${formatDateTime(state.lastMidrollAt)} (${formatAgo(state.lastMidrollAt)})
+        </div>
+        <div style="background:#13182a; padding:10px; border-radius:12px;">
+          <b>Laatst gestarte break</b><br>${state.lastBreakSpotCount || 0} spots op ${formatDateTime(state.lastBreakStartedAt)}
+        </div>
+      </div>
+
+      <div style="background:#13182a; padding:10px; border-radius:12px; margin-bottom:12px;">
+        <b>Huidige metadata</b><br>
+        <div style="margin-top:6px;">${escapeHtml(state.visibleLiveTitle || state.currentSong || '-')}</div>
+      </div>
+
+      <div style="background:#13182a; padding:10px; border-radius:12px; margin-bottom:12px;">
+        <b>Laatste monitorreden</b><br>
+        <div style="margin-top:6px;">${escapeHtml(state.reason || '-')}</div>
+      </div>
+
+      <div style="background:#13182a; padding:10px; border-radius:12px;">
+        <b>Recente metadata history</b>
+        <div style="margin-top:8px;">${historyHtml}</div>
+      </div>
+    `;
   }
 
   function bindTabs() {
@@ -200,13 +468,17 @@ document.addEventListener('DOMContentLoaded', () => {
       document.querySelectorAll('.admin-tab-panel').forEach(p => p.classList.remove('active'));
       btn.classList.add('active');
       document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+      if (btn.dataset.tab === 'stream') renderStreamMonitor();
     }));
   }
 
   function bindEvents() {
     document.getElementById('saveStreamBtn').addEventListener('click', () => {
       data.streamUrl = document.getElementById('streamUrlInput').value.trim();
-      data.metadataSource = { baseUrl: document.getElementById('metaBaseUrl').value.trim(), type: document.getElementById('metaType').value };
+      data.metadataSource = {
+        baseUrl: document.getElementById('metaBaseUrl').value.trim(),
+        type: document.getElementById('metaType').value
+      };
       Shared.saveStreamUrl(data);
       Shared.saveMetadataSource(data);
       alert('Stream en metadata opgeslagen.');
@@ -223,7 +495,9 @@ document.addEventListener('DOMContentLoaded', () => {
       const end = document.getElementById('ovEnd').value.trim();
       const title = document.getElementById('ovTitle').value.trim();
       const desc = document.getElementById('ovDesc').value.trim();
+
       if (!date || !start || !end || !title) return alert('Vul datum, start, eind en programma in.');
+
       data.overrides.push({ date, startTime: start, endTime: end, programTitle: title, desc });
       Shared.saveOverrides(data);
       renderOverrides();
@@ -233,13 +507,22 @@ document.addEventListener('DOMContentLoaded', () => {
       const title = document.getElementById('newsTitleInput').value.trim();
       const content = document.getElementById('newsContentInput').value.trim();
       const file = document.getElementById('newsImageUpload').files[0];
+
       if (!title || !content) return alert('Titel en inhoud zijn verplicht.');
+
       const addNews = imageData => {
-        data.news.push({ id: 'n' + Date.now(), title, content, date: new Date().toISOString().slice(0, 10), imageData: imageData || '' });
+        data.news.push({
+          id: 'n' + Date.now(),
+          title,
+          content,
+          date: new Date().toISOString().slice(0, 10),
+          imageData: imageData || ''
+        });
         Shared.saveNews(data);
         renderNewsAdmin();
         alert('Nieuws toegevoegd.');
       };
+
       if (file) {
         const reader = new FileReader();
         reader.onload = e => addNews(e.target.result);
@@ -259,8 +542,10 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('addMetaKeywordBtn').addEventListener('click', () => {
       const keyword = document.getElementById('metaKeywordInput').value.trim().toLowerCase();
       const count = parseInt(document.getElementById('metaKeywordCountInput').value || '1', 10);
+
       if (!keyword) return alert('Geef een metadata keyword in.');
       if (Number.isNaN(count) || count < 1) return alert('Geef een geldig aantal spots in.');
+
       data.metaKeywordQuotas[keyword] = count;
       Shared.saveMetaKeywordQuotas(data);
       document.getElementById('metaKeywordInput').value = '';
@@ -296,13 +581,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const ad = Shared.normalizeAdRule({
         id: 'ad' + Date.now(),
-        name, advertiser, type, triggerType, triggerValue,
-        audioMode: file ? 'upload' : 'url', audioUrl: url, hasUploadedAudio: !!file,
-        startDateTime: start, endDateTime: end,
+        name,
+        advertiser,
+        type,
+        triggerType,
+        triggerValue,
+        audioMode: file ? 'upload' : 'url',
+        audioUrl: url,
+        hasUploadedAudio: !!file,
+        startDateTime: start,
+        endDateTime: end,
         hourStart: hourStart === '' ? '' : String(hourStart),
         hourEnd: hourEnd === '' ? '' : String(hourEnd),
-        maxPerDay, maxPlays, notes,
-        currentPlays: 0, playsToday: 0, enabled: true
+        maxPerDay,
+        maxPlays,
+        notes,
+        currentPlays: 0,
+        playsToday: 0,
+        enabled: true
       });
 
       if (file) {
@@ -322,7 +618,11 @@ document.addEventListener('DOMContentLoaded', () => {
       localStorage.clear();
       location.reload();
     });
-    document.getElementById('logoutAdminBtn').addEventListener('click', () => { adminLogged = false; renderLogin(); });
+
+    document.getElementById('logoutAdminBtn').addEventListener('click', () => {
+      adminLogged = false;
+      renderLogin();
+    });
   }
 
   function renderAdmin() {
@@ -336,7 +636,13 @@ document.addEventListener('DOMContentLoaded', () => {
     renderMetadataKeywords();
     renderAdRules();
     renderAdvertiserStats();
+    renderStreamMonitor();
+    startMonitorRefresh();
   }
+
+  window.addEventListener('storage', e => {
+    if (e.key === MONITOR_STORAGE_KEY) renderStreamMonitor();
+  });
 
   renderLogin();
 });
