@@ -16,16 +16,18 @@ document.addEventListener('DOMContentLoaded', () => {
   const fullNewsList = document.getElementById('fullNewsList');
   const contactFeedback = document.getElementById('contactFeedback');
 
+  const MIDROLL_COOLDOWN_MS = 180000;
+  const HISTORY_LIMIT = 4;
+
   let mainAudio = new Audio();
   let adAudio = new Audio();
   let isPlaying = false;
   let prerollDone = false;
   let currentAdPlaying = false;
   let currentSong = '';
-  let pendingMidrollMetadata = '';
-  let pendingMidrollUntil = 0;
-  let lastConsumedTriggerKey = '';
-  let lastConsumedAt = 0;
+  let metadataHistory = [];
+  let lastMidrollAt = 0;
+  let pendingTriggerFingerprint = '';
 
   function setVolumeBoth() {
     const vol = Number(volumeSlider.value || 0.8);
@@ -47,8 +49,13 @@ document.addEventListener('DOMContentLoaded', () => {
     mainAudio.play().catch(() => null);
     isPlaying = true;
     playBtn.innerHTML = '⏸';
-    adStatusMsg.innerHTML = 'stream actief';
-    evaluatePendingMidroll();
+    if (lastMidrollAt && (Date.now() - lastMidrollAt) < MIDROLL_COOLDOWN_MS) {
+      const left = Math.ceil((MIDROLL_COOLDOWN_MS - (Date.now() - lastMidrollAt)) / 1000);
+      adStatusMsg.innerHTML = `cooldown ${left}s`;
+    } else {
+      adStatusMsg.innerHTML = 'stream actief';
+    }
+    evaluateMetadataHistoryForMidroll();
   }
 
   function pauseMain() {
@@ -103,45 +110,61 @@ document.addEventListener('DOMContentLoaded', () => {
     return false;
   }
 
-  function songContainsMidrollTrigger(songText) {
-    const hay = String(songText || '').toLowerCase();
-    if (!hay) return false;
-    if (/adcount\s*-\s*\d+/i.test(hay)) return true;
-    return Object.keys(data.metaKeywordQuotas || {}).some(keyword => hay.includes(String(keyword).toLowerCase()));
+  function addMetadataToHistory(songText) {
+    const text = String(songText || '').trim();
+    if (!text) return;
+    const normalized = Shared.normalizeForMatch(text);
+    const existingIndex = metadataHistory.findIndex(item => item.normalized === normalized);
+    if (existingIndex !== -1) metadataHistory.splice(existingIndex, 1);
+    metadataHistory.unshift({
+      text,
+      normalized,
+      timestamp: Date.now()
+    });
+    metadataHistory = metadataHistory.slice(0, HISTORY_LIMIT);
   }
 
-  function rememberMidrollTrigger(songText) {
-    if (!songContainsMidrollTrigger(songText)) return;
-    pendingMidrollMetadata = songText;
-    pendingMidrollUntil = Date.now() + 12000;
-    adStatusMsg.innerHTML = 'midroll trigger gezien';
+  function getCooldownRemainingMs() {
+    if (!lastMidrollAt) return 0;
+    return Math.max(0, MIDROLL_COOLDOWN_MS - (Date.now() - lastMidrollAt));
   }
 
-  function evaluatePendingMidroll() {
+  function findTriggerInHistory() {
+    data = Shared.loadAppData();
+    for (const item of metadataHistory) {
+      if (Shared.hasMidrollTrigger(item.text, data)) {
+        return item;
+      }
+    }
+    return null;
+  }
+
+  function evaluateMetadataHistoryForMidroll() {
     if (currentAdPlaying || !isPlaying) return;
-    if (!pendingMidrollMetadata) return;
-    if (Date.now() > pendingMidrollUntil) {
-      pendingMidrollMetadata = '';
-      pendingMidrollUntil = 0;
+
+    const cooldownLeft = getCooldownRemainingMs();
+    if (cooldownLeft > 0) {
+      adStatusMsg.innerHTML = `cooldown ${Math.ceil(cooldownLeft / 1000)}s`;
       return;
     }
 
-    data = Shared.loadAppData();
-    const triggerKey = pendingMidrollMetadata.toLowerCase();
-    if (triggerKey === lastConsumedTriggerKey && (Date.now() - lastConsumedAt) < 15000) return;
+    const triggeredItem = findTriggerInHistory();
+    if (!triggeredItem) return;
 
-    const desiredCount = Shared.parseAdCount(pendingMidrollMetadata, data);
-    const selected = Shared.chooseAdsForBreak(data, 'midroll', pendingMidrollMetadata, desiredCount);
+    const fingerprint = triggeredItem.normalized;
+    if (fingerprint && fingerprint === pendingTriggerFingerprint) return;
+
+    data = Shared.loadAppData();
+    const desiredCount = Shared.parseAdCount(triggeredItem.text, data);
+    const selected = Shared.chooseAdsForBreak(data, 'midroll', triggeredItem.text, desiredCount);
     if (!selected.length) return;
 
-    lastConsumedTriggerKey = triggerKey;
-    lastConsumedAt = Date.now();
-    const usedMetadata = pendingMidrollMetadata;
-    pendingMidrollMetadata = '';
-    pendingMidrollUntil = 0;
+    pendingTriggerFingerprint = fingerprint;
+    lastMidrollAt = Date.now();
     playAdBreakSequence(selected, () => {
+      metadataHistory = metadataHistory.filter(item => item.normalized !== fingerprint);
+      pendingTriggerFingerprint = '';
       adStatusMsg.innerHTML = 'ads actief';
-      console.log('Midroll gestart op trigger:', usedMetadata);
     });
   }
 
@@ -160,13 +183,13 @@ document.addEventListener('DOMContentLoaded', () => {
     if (song) {
       liveSongTitle.innerHTML = song;
       nowPlayingMeta.innerHTML = song.substring(0, 60);
-      rememberMidrollTrigger(song);
+      addMetadataToHistory(song);
       if (song !== currentSong) currentSong = song;
-      evaluatePendingMidroll();
+      evaluateMetadataHistoryForMidroll();
     } else {
       liveSongTitle.innerHTML = 'Metadata niet beschikbaar';
       nowPlayingMeta.innerHTML = 'live metadata laden...';
-      evaluatePendingMidroll();
+      evaluateMetadataHistoryForMidroll();
     }
   }
 
@@ -222,7 +245,13 @@ document.addEventListener('DOMContentLoaded', () => {
     contactFeedback.innerText = (naam && msg) ? `Bedankt ${naam}!` : 'Vul alles in';
   });
   document.querySelector('.close-modal').addEventListener('click', () => document.getElementById('newsModal').classList.remove('active'));
-  window.addEventListener('storage', () => { data = Shared.loadAppData(); updateStreamUrl(); renderNews(); renderSchedule(scheduleDate.value); updateCurrentProgram(); });
+  window.addEventListener('storage', () => {
+    data = Shared.loadAppData();
+    updateStreamUrl();
+    renderNews();
+    renderSchedule(scheduleDate.value);
+    updateCurrentProgram();
+  });
 
   setVolumeBoth();
   updateStreamUrl();
@@ -232,6 +261,6 @@ document.addEventListener('DOMContentLoaded', () => {
   updateCurrentProgram();
   bindPanels();
   fetchMetadata();
-  setInterval(fetchMetadata, 100);
+  setInterval(fetchMetadata, 1000);
   setInterval(updateCurrentProgram, 60000);
 });
