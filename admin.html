@@ -3,46 +3,25 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
-  <title>Versuz Radio</title>
+  <title>Versuz Radio Admin</title>
   <link rel="stylesheet" href="assets/css/site.css">
 </head>
 <body>
-  <div class="versuz-container">
-    <div class="brand">
-      <div class="logo"><h1>VERSUZ RADIO</h1><p>live • metadata • slimme ads • proxy ready</p></div>
+  <div class="admin-shell">
+    <div class="brand" style="margin-top:1rem; border-radius:2rem 2rem 0 0; background:rgba(8,12,22,0.6); border:1px solid rgba(255,140,90,0.25);">
+      <div class="logo"><h1>VERSUZ RADIO</h1><p>admin • metadata • advertenties • planning</p></div>
       <div class="nav-row">
-        <button class="nav-btn active" data-panel="home">🏠 HOME</button>
-        <button class="nav-btn" data-panel="programs">📅 PROGRAMMA'S</button>
-        <button class="nav-btn" data-panel="news">📰 NIEUWS</button>
-        <button class="nav-btn" data-panel="contact">📞 CONTACT</button>
-        <a class="nav-btn page-link" href="admin.html">🔐 ADMIN</a>
+        <a class="nav-btn page-link" href="index.html">🏠 Publieke site</a>
+        <span class="nav-btn active">🔐 Admin</span>
       </div>
     </div>
 
-    <div class="player-card">
-      <div class="stream-flex">
-        <div class="ctrl-group">
-          <button id="playPauseBtn">▶</button>
-          <input type="range" id="volumeCtrl" min="0" max="1" step="0.01" value="0.8">
-        </div>
-        <div class="meta-live"><span id="nowPlayingMeta">live metadata laden...</span></div>
-        <div class="ad-badge" id="adStatusMsg">ads actief</div>
-      </div>
-      <div class="now-playing-row">
-        <span><strong>📰 Live track:</strong> <span id="liveSongTitle">-</span> <button id="refreshMetaBtn" class="small-btn" style="margin-left:8px;">🔄</button></span>
-        <span class="program-badge"><strong>📻 Huidig programma:</strong> <span id="currentProgramName">-</span></span>
-      </div>
-      <div class="warning">Klik PLAY — metadata via proxy. Tijdens preroll of midroll wordt de stream tijdelijk gepauzeerd.</div>
+    <div class="panel active-panel" style="display:block; background:rgba(8,12,22,0.6); border:1px solid rgba(255,140,90,0.25); border-top:none; border-radius:0 0 2rem 2rem;">
+      <div id="adminRoot"></div>
     </div>
-
-    <div id="homePanel" class="panel active-panel"><h2>🎧 Welkom bij Versuz Radio</h2><p>De ultieme mix van dance, classics & exclusieve shows.</p><div style="margin:1.8rem 0;"><h3>🔥 Laatste updates</h3><div id="homeNewsPreview" class="news-grid"></div></div></div>
-    <div id="programsPanel" class="panel"><h2>📅 Programma overzicht</h2><div class="flex-row"><label>📆 Kies datum: <input type="date" id="scheduleDate" class="small-btn" style="width:auto;"></label><span id="replacementBadge"></span></div><div id="scheduleTableContainer" class="schedule-table">Laden...</div><p class="warning">✏️ Vervangingen en het volledige weekrooster beheer je in ADMIN.</p></div>
-    <div id="newsPanel" class="panel"><h2>📰 Artikelen & radionieuws</h2><div id="fullNewsList" class="news-grid"></div></div>
-    <div id="contactPanel" class="panel"><h2>📞 Contact</h2><div class="flex-row"><div style="flex:1; background:#0b0f1c; border-radius:1.5rem; padding:1rem;"><h3>Versuz Radio HQ</h3><p>📧 hello@versuzradio.be</p><p>📞 +32 3 123 45 67</p><p>📍 Antwerpen</p><p>🎵 IG/TikTok: @versuzradio</p></div><div style="flex:1;"><input type="text" id="contactNameInput" placeholder="Jouw naam"><textarea id="contactMsgInput" rows="3" placeholder="Bericht"></textarea><button id="sendContactBtn" class="small-btn">Verstuur</button><p id="contactFeedback" class="warning"></p></div></div></div>
-
-    <div id="newsModal" class="modal"><div class="modal-content"><span class="close-modal">&times;</span><h3 id="modalTitle"></h3><div id="modalImage"></div><p id="modalContent"></p><small id="modalDate"></small></div></div>
   </div>
+
   <script src="assets/js/shared.js"></script>
-  <script src="assets/js/player.js"></script>
+  <script src="assets/js/admin.js"></script>
 </body>
 </html>
