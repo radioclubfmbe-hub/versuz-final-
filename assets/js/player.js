@@ -141,31 +141,38 @@ document.addEventListener('DOMContentLoaded', () => {
     writeMonitorState('stream-url-applied');
   }
 
-  async function safePlayMain() {
-    try {
-      await mainAudio.play();
-      return true;
-    } catch (err) {
-      console.warn('Main audio play mislukt', err);
-      adStatusMsg.innerHTML = 'tik nog eens op play';
-      writeMonitorState('main-play-failed');
-      return false;
-    }
-  }
-
   function playMain() {
     if (currentAdPlaying) return;
     if (!appliedStreamUrl) applyConfiguredStreamUrl(true);
     if (pendingStreamReload && !isPlaying) applyConfiguredStreamUrl(true);
-    safePlayMain().then(ok => {
-      if (!ok) return;
+
+    adStatusMsg.innerHTML = IS_IOS ? 'verbinden met stream...' : 'stream starten...';
+    writeMonitorState('stream-start-requested');
+
+    const playPromise = mainAudio.play();
+    if (playPromise && typeof playPromise.then === 'function') {
+      playPromise.then(() => {
+        isPlaying = true;
+        playBtn.innerHTML = '⏸';
+        refreshPublicStatus();
+        writeMonitorState('stream-playing');
+        fetchMetadata(true);
+        if (!IS_IOS) evaluateMetadataHistoryForMidroll();
+      }).catch(err => {
+        console.warn('Main audio play mislukt', err);
+        isPlaying = false;
+        playBtn.innerHTML = '▶';
+        adStatusMsg.innerHTML = IS_IOS ? 'iPhone blokkeert audio - tik nog eens op PLAY' : 'tik nog eens op play';
+        writeMonitorState('main-play-failed');
+      });
+    } else {
       isPlaying = true;
       playBtn.innerHTML = '⏸';
       refreshPublicStatus();
-      writeMonitorState('stream-playing');
+      writeMonitorState('stream-playing-no-promise');
       fetchMetadata(true);
       if (!IS_IOS) evaluateMetadataHistoryForMidroll();
-    });
+    }
   }
 
   function pauseMain() {
@@ -240,7 +247,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (IS_IOS) {
       prerollDone = true;
-      adStatusMsg.innerHTML = 'iPhone-modus: stream start zonder preroll';
+      adStatusMsg.innerHTML = 'iPhone-modus: tik om live te starten';
       playMain();
       return false;
     }
@@ -413,8 +420,19 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   playBtn.addEventListener('click', () => {
-    if (isPlaying) pauseMain();
-    else if (!prerollDone) attemptPreroll();
+    if (isPlaying) {
+      pauseMain();
+      return;
+    }
+
+    if (IS_IOS) {
+      if (!appliedStreamUrl) applyConfiguredStreamUrl(true);
+      prerollDone = true;
+      playMain();
+      return;
+    }
+
+    if (!prerollDone) attemptPreroll();
     else playMain();
   });
 
