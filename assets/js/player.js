@@ -37,6 +37,8 @@ document.addEventListener('DOMContentLoaded', () => {
   let lastHandledFingerprint = '';
   let lastHandledAt = 0;
   let lastMonitorReason = 'init';
+  let appliedStreamUrl = '';
+  let pendingStreamReload = false;
 
   function setVolumeBoth() {
     const vol = Number(volumeSlider.value || 0.8);
@@ -65,10 +67,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function getInternalStatusText() {
     if (currentAdPlaying) return `ad-break (${pluralSpots(currentBreakSpotCount)})`;
-    if (!isPlaying) return 'paused';
+    if (!isPlaying) return pendingStreamReload ? 'paused (config wacht)' : 'paused';
     const cooldownLeft = getCooldownRemainingMs();
     if (cooldownLeft > 0) return `cooldown ${Math.ceil(cooldownLeft / 1000)}s`;
-    return 'playing';
+    return pendingStreamReload ? 'playing (config wacht)' : 'playing';
   }
 
   function refreshPublicStatus() {
@@ -102,25 +104,43 @@ document.addEventListener('DOMContentLoaded', () => {
         lastBreakStartedAt,
         lastBreakSpotCount,
         currentBreakSpotCount,
-        currentBreakTriggerText
+        currentBreakTriggerText,
+        pendingStreamReload,
+        appliedStreamUrl,
+        configuredStreamUrl: data.streamUrl || ''
       }));
     } catch (e) {
       console.warn('Monitor state opslaan mislukt', e);
     }
   }
 
-  function updateStreamUrl() {
+  function applyConfiguredStreamUrl(force = false) {
+    const nextUrl = String(data.streamUrl || '').trim();
+    if (!nextUrl) return;
+    if (!force && appliedStreamUrl === nextUrl) return;
+
+    const wasPlaying = isPlaying && !currentAdPlaying;
     mainAudio.pause();
-    mainAudio.src = data.streamUrl;
+    mainAudio.src = nextUrl;
     mainAudio.load();
-    if (isPlaying && !currentAdPlaying) {
+    appliedStreamUrl = nextUrl;
+    pendingStreamReload = false;
+
+    if (wasPlaying) {
       mainAudio.play().catch(() => null);
     }
-    writeMonitorState('stream-url-updated');
+
+    writeMonitorState('stream-url-applied');
   }
 
   function playMain() {
     if (currentAdPlaying) return;
+    if (!appliedStreamUrl) {
+      applyConfiguredStreamUrl(true);
+    }
+    if (pendingStreamReload && !isPlaying) {
+      applyConfiguredStreamUrl(true);
+    }
     mainAudio.play().catch(() => null);
     isPlaying = true;
     playBtn.innerHTML = '⏸';
@@ -383,17 +403,38 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('newsModal').classList.remove('active');
   });
 
-  window.addEventListener('storage', () => {
+  window.addEventListener('storage', e => {
     data = Shared.loadAppData();
-    updateStreamUrl();
-    renderNews();
-    renderSchedule(scheduleDate.value);
-    updateCurrentProgram();
-    writeMonitorState('storage-sync');
+
+    if (!e || !e.key) {
+      renderNews();
+      renderSchedule(scheduleDate.value);
+      updateCurrentProgram();
+      writeMonitorState('storage-sync-generic');
+      return;
+    }
+
+    if (e.key === Shared.STORAGE.metadataSource || e.key === Shared.STORAGE.manualMetadata || e.key === Shared.STORAGE.metaKeywordQuotas || e.key === Shared.STORAGE.adRules) {
+      writeMonitorState('config-updated-without-stream-reload');
+    }
+
+    if (e.key === Shared.STORAGE.news) {
+      renderNews();
+    }
+
+    if (e.key === Shared.STORAGE.weeklySchedule || e.key === Shared.STORAGE.overrides) {
+      renderSchedule(scheduleDate.value);
+      updateCurrentProgram();
+    }
+
+    if (e.key === Shared.STORAGE.streamUrl) {
+      pendingStreamReload = true;
+      writeMonitorState('stream-url-change-saved-for-next-restart');
+    }
   });
 
   setVolumeBoth();
-  updateStreamUrl();
+  applyConfiguredStreamUrl(true);
   scheduleDate.value = new Date().toISOString().slice(0, 10);
   renderSchedule(scheduleDate.value);
   renderNews();
