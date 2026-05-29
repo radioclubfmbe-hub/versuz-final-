@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GitHub sessie admin</title>
+  <link rel="stylesheet" href="assets/css/site.css">
+  <style>
+    .admin-wrap { max-width: 1000px; margin: 40px auto; padding: 20px; }
+    .card { background: #101522; border-radius: 16px; padding: 20px; margin-bottom: 20px; }
+    .card h2 { margin-top: 0; }
+    label { display:block; margin: 12px 0 6px; }
+    input { width:100%; padding:12px; border-radius:10px; border:1px solid #334; background:#0b0f1c; color:#fff; }
+    button { margin-top: 12px; margin-right: 10px; padding: 12px 16px; border-radius: 10px; border: 0; background: #ff7a18; color:#fff; cursor:pointer; }
+    button.secondary { background:#26314c; }
+    pre { white-space: pre-wrap; word-break: break-word; background:#0b0f1c; padding:16px; border-radius:10px; }
+    table { width:100%; border-collapse: collapse; }
+    th, td { border-bottom: 1px solid #334; padding: 10px; text-align:left; }
+  </style>
+</head>
+<body>
+  <div class="admin-wrap">
+    <div class="card">
+      <h2>GitHub instellingen</h2>
+      <label>GitHub token</label>
+      <input id="ghToken" type="password" placeholder="ghp_... of fine-grained token">
+
+      <label>Owner</label>
+      <input id="ghOwner" type="text" placeholder="jouw-github-naam">
+
+      <label>Repository</label>
+      <input id="ghRepo" type="text" placeholder="versuz-radio-player">
+
+      <label>Branch</label>
+      <input id="ghBranch" type="text" value="main">
+
+      <label>Bestandspad</label>
+      <input id="ghFilePath" type="text" value="data/sessions.json">
+
+      <button id="saveCfgBtn">Opslaan</button>
+      <button id="clearTokenBtn" class="secondary">Token wissen</button>
+      <p id="cfgMsg"></p>
+    </div>
+
+    <div class="card">
+      <h2>Sessies bekijken</h2>
+      <button id="refreshSessionsBtn">Ververs</button>
+      <button id="clearSessionsBtn" class="secondary">Wis alle sessies</button>
+      <p id="sessionsMsg"></p>
+      <div id="sessionsTable"></div>
+    </div>
+
+    <div class="card">
+      <h2>Ruwe JSON</h2>
+      <pre id="rawJsonBox">Nog niets geladen.</pre>
+    </div>
+  </div>
+
+  <script src="assets/js/github-log.js"></script>
+  <script>
+    const Api = window.GitHubSessionStore;
+    const ghToken = document.getElementById('ghToken');
+    const ghOwner = document.getElementById('ghOwner');
+    const ghRepo = document.getElementById('ghRepo');
+    const ghBranch = document.getElementById('ghBranch');
+    const ghFilePath = document.getElementById('ghFilePath');
+    const cfgMsg = document.getElementById('cfgMsg');
+    const sessionsMsg = document.getElementById('sessionsMsg');
+    const sessionsTable = document.getElementById('sessionsTable');
+    const rawJsonBox = document.getElementById('rawJsonBox');
+
+    function loadConfigIntoForm() {
+      const cfg = Api.getConfig();
+      ghToken.value = cfg.token || '';
+      ghOwner.value = cfg.owner || '';
+      ghRepo.value = cfg.repo || '';
+      ghBranch.value = cfg.branch || 'main';
+      ghFilePath.value = cfg.filePath || 'data/sessions.json';
+    }
+
+    function renderSessions(data) {
+      const sessions = data.sessions || [];
+      sessionsMsg.textContent = `${sessions.length} actieve sessies`;
+      rawJsonBox.textContent = JSON.stringify(data, null, 2);
+      if (!sessions.length) {
+        sessionsTable.innerHTML = '<p>Geen actieve sessies.</p>';
+        return;
+      }
+      sessionsTable.innerHTML = `
+        <table>
+          <thead>
+            <tr><th>ID</th><th>Status</th><th>Started</th><th>Last Seen</th><th>Label</th></tr>
+          </thead>
+          <tbody>
+            ${sessions.map(s => `
+              <tr>
+                <td>${s.id}</td>
+                <td>${s.status || ''}</td>
+                <td>${s.startedAt ? new Date(s.startedAt).toLocaleString() : ''}</td>
+                <td>${s.lastSeen ? new Date(s.lastSeen).toLocaleString() : ''}</td>
+                <td>${s.label || ''}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `;
+    }
+
+    document.getElementById('saveCfgBtn').addEventListener('click', () => {
+      Api.saveConfig({
+        token: ghToken.value,
+        owner: ghOwner.value,
+        repo: ghRepo.value,
+        branch: ghBranch.value,
+        filePath: ghFilePath.value
+      });
+      cfgMsg.textContent = 'GitHub instellingen lokaal opgeslagen in deze browser.';
+    });
+
+    document.getElementById('clearTokenBtn').addEventListener('click', () => {
+      Api.clearToken();
+      ghToken.value = '';
+      cfgMsg.textContent = 'Token gewist uit deze browser.';
+    });
+
+    document.getElementById('refreshSessionsBtn').addEventListener('click', async () => {
+      try {
+        const data = await Api.listSessions();
+        renderSessions(data);
+      } catch (e) {
+        sessionsMsg.textContent = e.message;
+      }
+    });
+
+    document.getElementById('clearSessionsBtn').addEventListener('click', async () => {
+      try {
+        const data = await Api.clearAllSessions();
+        renderSessions(data);
+      } catch (e) {
+        sessionsMsg.textContent = e.message;
+      }
+    });
+
+    loadConfigIntoForm();
+  </script>
+</body>
+</html>
