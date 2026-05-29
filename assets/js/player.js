@@ -15,13 +15,15 @@ document.addEventListener('DOMContentLoaded', () => {
   const homeNewsPreview = document.getElementById('homeNewsPreview');
   const fullNewsList = document.getElementById('fullNewsList');
   const contactFeedback = document.getElementById('contactFeedback');
+  const iosPlaybackHint = document.getElementById('iosPlaybackHint');
 
   const MIDROLL_COOLDOWN_MS = 180000;
   const HISTORY_LIMIT = 4;
   const MONITOR_STORAGE_KEY = 'versuz_monitor_state';
+  const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
-  let mainAudio = new Audio();
-  let adAudio = new Audio();
+  let mainAudio = document.getElementById('mainAudioEl') || new Audio();
+  let adAudio = document.getElementById('adAudioEl') || new Audio();
   let isPlaying = false;
   let prerollDone = false;
   let currentAdPlaying = false;
@@ -39,6 +41,8 @@ document.addEventListener('DOMContentLoaded', () => {
   let lastMonitorReason = 'init';
   let appliedStreamUrl = '';
   let pendingStreamReload = false;
+
+  if (iosPlaybackHint && IS_IOS) iosPlaybackHint.style.display = 'block';
 
   function setVolumeBoth() {
     const vol = Number(volumeSlider.value || 0.8);
@@ -74,7 +78,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function refreshPublicStatus() {
-    adStatusMsg.innerHTML = getPublicStatusText();
+    adStatusMsg.innerHTML = IS_IOS && isPlaying ? 'stream actief (iPhone-modus)' : getPublicStatusText();
   }
 
   function writeMonitorState(reason = '') {
@@ -107,7 +111,8 @@ document.addEventListener('DOMContentLoaded', () => {
         currentBreakTriggerText,
         pendingStreamReload,
         appliedStreamUrl,
-        configuredStreamUrl: data.streamUrl || ''
+        configuredStreamUrl: data.streamUrl || '',
+        isIosMode: IS_IOS
       }));
     } catch (e) {
       console.warn('Monitor state opslaan mislukt', e);
@@ -127,32 +132,47 @@ document.addEventListener('DOMContentLoaded', () => {
     pendingStreamReload = false;
 
     if (wasPlaying) {
-      mainAudio.play().catch(() => null);
+      mainAudio.play().catch(err => {
+        console.warn('Stream play mislukt', err);
+        adStatusMsg.innerHTML = 'tik nog eens op play';
+      });
     }
 
     writeMonitorState('stream-url-applied');
   }
 
+  async function safePlayMain() {
+    try {
+      await mainAudio.play();
+      return true;
+    } catch (err) {
+      console.warn('Main audio play mislukt', err);
+      adStatusMsg.innerHTML = 'tik nog eens op play';
+      writeMonitorState('main-play-failed');
+      return false;
+    }
+  }
+
   function playMain() {
     if (currentAdPlaying) return;
-    if (!appliedStreamUrl) {
-      applyConfiguredStreamUrl(true);
-    }
-    if (pendingStreamReload && !isPlaying) {
-      applyConfiguredStreamUrl(true);
-    }
-    mainAudio.play().catch(() => null);
-    isPlaying = true;
-    playBtn.innerHTML = '⏸';
-    refreshPublicStatus();
-    writeMonitorState('stream-playing');
-    fetchMetadata(true);
-    evaluateMetadataHistoryForMidroll();
+    if (!appliedStreamUrl) applyConfiguredStreamUrl(true);
+    if (pendingStreamReload && !isPlaying) applyConfiguredStreamUrl(true);
+    safePlayMain().then(ok => {
+      if (!ok) return;
+      isPlaying = true;
+      playBtn.innerHTML = '⏸';
+      refreshPublicStatus();
+      writeMonitorState('stream-playing');
+      fetchMetadata(true);
+      if (!IS_IOS) evaluateMetadataHistoryForMidroll();
+    });
   }
 
   function pauseMain() {
     mainAudio.pause();
+    adAudio.pause();
     isPlaying = false;
+    currentAdPlaying = false;
     playBtn.innerHTML = '▶';
     clearMetadataHistory();
     refreshPublicStatus();
@@ -163,6 +183,7 @@ document.addEventListener('DOMContentLoaded', () => {
     return new Promise((resolve, reject) => {
       adAudio.pause();
       adAudio.src = src;
+      adAudio.load();
       adAudio.onended = () => {
         adAudio.onended = null;
         resolve(true);
@@ -176,7 +197,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function playAdBreakSequence(ads, afterDone) {
-    if (!ads.length || currentAdPlaying) return false;
+    if (!ads.length || currentAdPlaying || IS_IOS) return false;
 
     currentAdPlaying = true;
     const wasPlaying = isPlaying;
@@ -216,6 +237,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function attemptPreroll() {
     data = Shared.loadAppData();
+
+    if (IS_IOS) {
+      prerollDone = true;
+      adStatusMsg.innerHTML = 'iPhone-modus: stream start zonder preroll';
+      playMain();
+      return false;
+    }
+
     const selected = Shared.chooseAdsForBreak(data, 'preroll', currentSong, 1);
 
     if (selected.length) {
@@ -262,8 +291,8 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function evaluateMetadataHistoryForMidroll() {
-    if (currentAdPlaying || !isPlaying) {
-      writeMonitorState('midroll-check-skipped-paused');
+    if (currentAdPlaying || !isPlaying || IS_IOS) {
+      writeMonitorState('midroll-check-skipped');
       return;
     }
 
@@ -337,7 +366,7 @@ document.addEventListener('DOMContentLoaded', () => {
       addMetadataToHistory(song);
       if (song !== currentSong) currentSong = song;
       writeMonitorState('metadata-fetched');
-      evaluateMetadataHistoryForMidroll();
+      if (!IS_IOS) evaluateMetadataHistoryForMidroll();
     } else {
       liveSongTitle.innerHTML = 'Metadata niet beschikbaar';
       nowPlayingMeta.innerHTML = 'live metadata laden...';
